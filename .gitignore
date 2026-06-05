@@ -1,0 +1,25 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+tfplan
+
+# Build output — regenerated on every terraform apply
+dist/
+
+# Lambda compiled files
+lambda/__pycache__/
+lambda/checks/__pycache__/
+*.pyc
+
+# Local env files
+.env
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Response files from manual Lambda invocations
+response.json

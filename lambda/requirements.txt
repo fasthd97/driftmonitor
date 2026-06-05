@@ -1,0 +1,11 @@
+# Lambda Python dependencies
+# --------------------------
+# boto3 is intentionally excluded — it is pre-installed in the
+# AWS Lambda Python runtime and does not need to be packaged.
+# Packaging it adds ~10MB to the zip for no benefit.
+#
+# requests: used for:
+#   - eol_scraper.py (HTTP GET to AWS docs)
+#   - ai_parser.py   (HTTP POST to Anthropic API)
+# Pinned to a specific version for reproducible builds.
+requests==2.32.3

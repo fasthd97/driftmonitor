@@ -1,0 +1,194 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Private S3 bucket configured for signed URL access.
+  Objects are never public — access is granted via time-limited signed URLs
+  generated programmatically using AWS credentials.
+
+# -------------------------------------------------------
+# PARAMETERS
+# -------------------------------------------------------
+# Values you can override at deploy time.
+# All have sensible defaults so you can deploy with no flags
+# if you just want to get started quickly.
+# -------------------------------------------------------
+Parameters:
+
+  BucketPrefix:
+    Type: String
+    Default: my-private-bucket
+    Description: >
+      Prefix for the S3 bucket name. Account ID is appended automatically
+      to guarantee global uniqueness. Change this to something meaningful
+      for your use case (e.g. my-photos, my-assets, my-uploads).
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment tag applied to all resources
+
+  OwnerTag:
+    Type: String
+    Default: platform-team
+    Description: Owner tag applied to the bucket for cost allocation and identification
+
+  EnableVersioning:
+    Type: String
+    Default: Enabled
+    AllowedValues: [Enabled, Suspended]
+    Description: >
+      Keep previous versions of objects. If you overwrite an object
+      accidentally, the previous version is preserved and recoverable.
+
+  SignedUrlExpirySeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 60
+    MaxValue: 604800
+    Description: >
+      Documentation only — how long signed URLs should be valid.
+      This is enforced in the code that generates the URL, not by S3.
+      Default is 1 hour (3600 seconds). Max AWS allows is 7 days (604800).
+
+# -------------------------------------------------------
+# RESOURCES
+# -------------------------------------------------------
+
+Resources:
+
+  # -------------------------------------------------------
+  # S3 BUCKET
+  # -------------------------------------------------------
+  # The bucket is fully private. No object is ever directly
+  # accessible via a public URL. Access is only via signed URLs.
+  #
+  # Bucket name includes account ID to guarantee global uniqueness.
+  # S3 bucket names are shared across all AWS accounts worldwide —
+  # a plain name like "my-photos" is almost certainly already taken.
+  # -------------------------------------------------------
+  PrivateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # !Sub replaces ${AWS::AccountId} with your actual account ID at deploy time
+      BucketName: !Sub '${BucketPrefix}-${AWS::AccountId}'
+
+      # -------------------------------------------------------
+      # Block all public access
+      # -------------------------------------------------------
+      # This is the most important setting. It ensures no object
+      # can ever be made public accidentally — not via ACL,
+      # not via bucket policy, not via any other mechanism.
+      # Signed URLs still work because they carry auth credentials
+      # in the URL itself — they do not require public access.
+      # -------------------------------------------------------
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true        # Reject any request that includes a public ACL
+        BlockPublicPolicy: true      # Reject any bucket policy that grants public access
+        IgnorePublicAcls: true       # Ignore any existing public ACLs
+        RestrictPublicBuckets: true  # Restrict access to only authorized users
+
+      # -------------------------------------------------------
+      # Versioning
+      # -------------------------------------------------------
+      # Keeps previous versions of objects when overwritten.
+      # Useful for any bucket where accidental overwrites are a risk.
+      # -------------------------------------------------------
+      VersioningConfiguration:
+        Status: !Ref EnableVersioning
+
+      # -------------------------------------------------------
+      # CORS (Cross-Origin Resource Sharing)
+      # -------------------------------------------------------
+      # Required if browsers will use signed URLs to upload or
+      # download directly to/from S3 (e.g. a web app).
+      # Without this, browsers block the request as a CORS violation.
+      #
+      # AllowedOrigins: '*' is fine for dev. Tighten to your
+      # domain in prod (e.g. https://yoursite.com).
+      # -------------------------------------------------------
+      CorsConfiguration:
+        CorsRules:
+          - Id: SignedUrlAccess
+            AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET   # Download via signed URL
+              - PUT   # Upload via signed URL
+              - HEAD  # Check object metadata
+            AllowedOrigins:
+              - '*'
+            ExposedHeaders:
+              - ETag           # Needed for multipart upload completion
+              - x-amz-request-id
+            MaxAge: 3000       # How long browsers cache the CORS response (seconds)
+
+      # -------------------------------------------------------
+      # Lifecycle rules
+      # -------------------------------------------------------
+      # Moves old object versions to cheaper storage after 30 days,
+      # deletes them after 90. Keeps costs down as the bucket grows.
+      # -------------------------------------------------------
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupOldVersions
+            Status: Enabled
+            NoncurrentVersionTransitions:
+              - StorageClass: STANDARD_IA   # Cheaper storage for old versions
+                TransitionInDays: 30
+            NoncurrentVersionExpirationInDays: 90  # Delete old versions after 90 days
+
+      # -------------------------------------------------------
+      # Encryption
+      # -------------------------------------------------------
+      # Encrypts all objects at rest using AWS-managed keys.
+      # No extra cost, no performance impact, good security practice.
+      # -------------------------------------------------------
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      # -------------------------------------------------------
+      # Tags
+      # -------------------------------------------------------
+      # drift-monitor: enabled opts this stack into drift monitoring.
+      # Remove this tag if you do not want this stack monitored.
+      # -------------------------------------------------------
+      Tags:
+        - Key: drift-monitor
+          Value: enabled
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: Private object storage with signed URL access
+        - Key: Owner
+          Value: !Ref OwnerTag
+
+# -------------------------------------------------------
+# OUTPUTS
+# -------------------------------------------------------
+# Values printed after deploy. Use these in your application
+# code to reference the bucket without hardcoding the name.
+# -------------------------------------------------------
+Outputs:
+
+  BucketName:
+    Description: The S3 bucket name — use this in your application config
+    Value: !Ref PrivateBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+
+  BucketArn:
+    Description: The S3 bucket ARN — use this in IAM policies
+    Value: !GetAtt PrivateBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketArn'
+
+  SignedUrlExample:
+    Description: Python example showing how to generate a signed URL for this bucket
+    Value: !Sub >
+      import boto3
+      s3 = boto3.client('s3')
+      url = s3.generate_presigned_url('get_object',
+        Params={'Bucket': '${BucketPrefix}-${AWS::AccountId}', 'Key': 'your-file.jpg'},
+        ExpiresIn=${SignedUrlExpirySeconds})
