@@ -457,3 +457,116 @@ resource "aws_lambda_permission" "eventbridge" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.drift_monitor_schedule.arn
 }
+################################################################################
+# 9. CLOUDWATCH ALARMS - Self Monitoring
+# ---------------------------------------
+# These alarms watch the drift-monitor Lambda itself so we know if the
+# tool breaks or stops running. Without this, a silently failing Lambda
+# would mean stacks go unmonitored with no indication anything is wrong.
+#
+# All alarms publish to the same SNS topic as drift findings so alerts
+# land in the same inbox.
+#
+# Three alarms:
+#   - Errors    : Lambda threw an uncaught exception
+#   - Throttles : AWS rate-limited the Lambda (couldn't run)
+#   - Invocations : Lambda hasn't run in 8 days (dead man's switch)
+################################################################################
+
+# --- Alarm 1: Lambda Errors ---
+# Fires if the Lambda throws any uncaught exception.
+# Even one error in an hour is worth knowing about since this
+# runs on a weekly schedule — every run matters.
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  alarm_name          = "${var.project_name}-errors"
+  alarm_description   = "Drift monitor Lambda threw an uncaught exception. Check CloudWatch logs."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  dimensions = {
+    FunctionName = aws_lambda_function.drift_monitor.function_name
+  }
+
+  statistic           = "Sum"
+  period              = 3600       # Evaluate over 1 hour windows
+  evaluation_periods  = 1          # Alarm after 1 consecutive breach
+  threshold           = 1          # Breach if >= 1 error
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+
+  # If no data exists (Lambda never ran in this period), treat as OK.
+  # We have a separate alarm for that case below.
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.drift_alerts.arn]
+  ok_actions    = [aws_sns_topic.drift_alerts.arn]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "Alert if the drift monitor Lambda errors"
+  }
+}
+
+# --- Alarm 2: Lambda Throttles ---
+# Fires if AWS rate-limited the Lambda — means it tried to run
+# but AWS blocked it due to concurrency limits.
+# Throttles mean your stacks were not checked even though the
+# schedule fired.
+resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
+  alarm_name          = "${var.project_name}-throttles"
+  alarm_description   = "Drift monitor Lambda was throttled by AWS. Stacks may not have been checked."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Throttles"
+  dimensions = {
+    FunctionName = aws_lambda_function.drift_monitor.function_name
+  }
+
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.drift_alerts.arn]
+  ok_actions    = [aws_sns_topic.drift_alerts.arn]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "Alert if the drift monitor Lambda is throttled"
+  }
+}
+
+# --- Alarm 3: Lambda Not Invoked (Dead Man's Switch) ---
+# Fires if the Lambda has not run at all in 8 days.
+# This catches silent failures where EventBridge stops firing
+# or the Lambda is deleted/disabled without anyone noticing.
+#
+# treat_missing_data = "breaching" is the key here — if there
+# are NO invocations in the 8 day window, CloudWatch has no data
+# points. Setting breaching means no data = alarm triggers.
+# Without this, no data would just show as INSUFFICIENT_DATA
+# and the alarm would never fire.
+resource "aws_cloudwatch_metric_alarm" "lambda_not_invoked" {
+  alarm_name          = "${var.project_name}-not-invoked"
+  alarm_description   = "Drift monitor Lambda has not run in 7 days. EventBridge may have stopped firing."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Invocations"
+  dimensions = {
+    FunctionName = aws_lambda_function.drift_monitor.function_name
+  }
+
+  statistic           = "Sum"
+  period              = 86400     # 1 days in seconds (8 * 24 * 60 * 60)
+  evaluation_periods  = 7
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+
+  # Critical setting: no data means the Lambda never ran = breach
+  treat_missing_data  = "breaching"
+
+  alarm_actions = [aws_sns_topic.drift_alerts.arn]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "Alert if the drift monitor Lambda stops running entirely"
+  }
+}
