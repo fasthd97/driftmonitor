@@ -400,5 +400,4 @@ pytest tests/ -v
 - [ ] Phase 2: Self-monitoring alarms (alert if the Lambda itself errors)
 - [ ] Phase 3: RDS engine version and AMI age checks
 - [ ] Phase 4: Slack/Teams webhook alongside SNS email
-- [ ] Phase 5: Terraform provider version drift checker
-- [ ] Phase 6: Auto-remediation for safe fixes
+- [ ] Phase 5: Auto-remediation for safe fixes
