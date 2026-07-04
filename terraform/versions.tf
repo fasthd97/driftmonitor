@@ -16,19 +16,19 @@ terraform {
     # AWS provider — manages all AWS resources
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
 
     # Archive provider — zips the Lambda source code for deployment
     archive = {
       source  = "hashicorp/archive"
-      version = "~> 2.0"
+      version = "~> 2.8"
     }
 
     # Null provider — used to run the Lambda build script as a local-exec step
     null = {
       source  = "hashicorp/null"
-      version = "~> 3.0"
+      version = "~> 3.3"
     }
   }
 }
