@@ -16,7 +16,7 @@ terraform {
     # AWS provider — manages all AWS resources
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.0"
+      version = "~> 6.58"
     }
 
     # Archive provider — zips the Lambda source code for deployment
